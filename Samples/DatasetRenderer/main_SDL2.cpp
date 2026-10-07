@@ -93,7 +93,7 @@ namespace
 		float sunElevMax = 75;
 		int pointLights = 0;
 		float pointIntensity = 4;
-		std::string sky = "gradient";
+		std::string sky = "realistic";
 		std::string hdri;
 		bool rotateHdri = false;
 		float skyIntensity = 1;
@@ -107,6 +107,7 @@ namespace
 		// misc:
 		std::string shaderDir = DATASET_RENDERER_SHADER_DIR;
 		bool hidden = false;
+		std::string gpu = "discrete";
 	};
 
 	void PrintUsage()
@@ -166,7 +167,7 @@ Lighting:
   --point-lights N         number of random point lights around the model (default: 0)
   --point-intensity X      point light irradiance at the model center (default: 4)
   --sky gradient|realistic|none
-                           sky model (default: gradient)
+                           sky model (default: realistic)
   --hdri FILE              use an environment map (.hdr, .dds, ...; equirect or cubemap) as sky
   --rotate-hdri            randomize the environment map rotation per view
   --sky-intensity X        sky exposure multiplier (default: 1)
@@ -195,6 +196,8 @@ Shared post process (applied identically to both renderers):
 Misc:
   --shader-dir DIR         shader cache directory (default: %s)
   --hidden                 hide the preview window
+  --gpu discrete|integrated|nvidia|amd|intel
+                           graphics adapter to use: the first one of this type or vendor (default: discrete)
   -h, --help               show this help
 )", DATASET_RENDERER_SHADER_DIR);
 	}
@@ -311,6 +314,7 @@ Misc:
 			else if (a == "--bloom") o.bloom = true;
 			else if (a == "--shader-dir") ok = nextStr(o.shaderDir);
 			else if (a == "--hidden") o.hidden = true;
+			else if (a == "--gpu") ok = nextStr(o.gpu);
 			else if (a.size() > 1 && a[0] == '-')
 			{
 				std::fprintf(stderr, "Unknown option: %s (see --help)\n", a.c_str());
@@ -348,6 +352,7 @@ Misc:
 		if (!oneOf(o.sky, { "gradient", "realistic", "none" })) { std::fprintf(stderr, "Invalid --sky\n"); return 1; }
 		if (!oneOf(o.tonemap, { "aces", "reinhard", "uchimura" })) { std::fprintf(stderr, "Invalid --tonemap\n"); return 1; }
 		if (!oneOf(o.focus, { "object", "scene" })) { std::fprintf(stderr, "Invalid --focus\n"); return 1; }
+		if (!oneOf(o.gpu, { "discrete", "integrated", "nvidia", "amd", "intel" })) { std::fprintf(stderr, "Invalid --gpu\n"); return 1; }
 		if (o.clearance <= 0) { std::fprintf(stderr, "--clearance must be > 0\n"); return 1; }
 		if (o.maxAttempts <= 0) { std::fprintf(stderr, "--max-attempts must be > 0\n"); return 1; }
 		if (o.minTargetSize < 0) { std::fprintf(stderr, "--min-target-size must be >= 0\n"); return 1; }
@@ -1504,7 +1509,24 @@ int main(int argc, char* argv[])
 	application.allow_hdr = false; // SDR swapchain -> tonemapped sRGB output in both render paths
 	application.swapChain.desc.vsync = false;
 	application.SetRenderResolution((uint32_t)opt.width, (uint32_t)opt.height);
+	{
+		// The engine picks the adapter in SetWindow() from its command line flags (igpu, nvidiagpu, amdgpu, intelgpu):
+		std::string flag;
+		if (opt.gpu == "integrated") flag = "igpu";
+		else if (opt.gpu != "discrete") flag = opt.gpu + "gpu";
+		char* engineArgs[] = { argv[0], flag.data() };
+		wi::arguments::Parse(flag.empty() ? 1 : 2, engineArgs);
+	}
 	application.SetWindow(window.get());
+	{
+		const std::string adapter = wi::graphics::GetDevice()->GetAdapterName();
+		std::printf("GPU: %s\n", adapter.c_str());
+		if (opt.gpu != "discrete" && opt.gpu != "integrated" && wi::helper::toUpper(adapter).find(wi::helper::toUpper(opt.gpu)) == std::string::npos)
+		{
+			std::fprintf(stderr, "Error: no %s GPU found (the engine fell back to %s)\n", opt.gpu.c_str(), adapter.c_str());
+			return 1;
+		}
+	}
 	application.Initialize();
 	application.infoDisplay.active = false;
 
@@ -1808,6 +1830,17 @@ int main(int argc, char* argv[])
 		camera.Up = XMFLOAT3(0, 1, 0);
 		camera.SetDirty();
 		camera.UpdateCamera();
+
+		// Directional shadow cascades end at fixed distances (8, 80, 800 by default) and nothing further is shadowed.
+		//	Scale them with the far plane, which encloses the whole scene, keeping the default 10x ratio between cascades:
+		for (size_t i = 0; i < scene.lights.GetCount(); ++i)
+		{
+			LightComponent& light = scene.lights[i];
+			if (light.GetType() == LightComponent::DIRECTIONAL)
+			{
+				light.cascade_distances = { zFar * 0.01f, zFar * 0.1f, zFar };
+			}
+		}
 	};
 
 	auto ApplyLights = [&](const LightSetup& view) {

@@ -23,6 +23,7 @@ build/Samples/DatasetRenderer/DatasetRenderer <model> [options]
 
 - The first run compiles the shaders, which is slow. The shader cache directory is set with `--shader-dir`.
 - `--hidden` hides the preview window. A window is still created.
+- `--gpu discrete|integrated|nvidia|amd|intel` selects the graphics adapter: the first one of this type or vendor. The default is `discrete`. The adapter in use is printed as `GPU: <name>`. If the requested vendor is not found, the tool exits with an error.
 - **Exit code**: `0` on success. `1` on error, or when the window was closed.
 - **Progress output**: progress goes to stdout and warnings and errors to stderr.
 
