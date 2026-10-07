@@ -38,6 +38,7 @@ if(UNIX)
 endif()
 if(UNIX)
     option(WICKED_LINUX_TEMPLATE "Build WickedEngine Linux template" ON)
+    option(WICKED_DATASET_RENDERER "Build the raster/path-traced dataset renderer tool" ON)
 elseif(WIN32)
     option(WICKED_WINDOWS_TEMPLATE "Build WickedEngine Windows template" ON)
 endif()
@@ -217,6 +218,10 @@ endif()
 
 if (WICKED_LINUX_TEMPLATE)
     add_subdirectory(Samples/Template_Linux)
+endif()
+
+if (WICKED_DATASET_RENDERER AND NOT WICKED_USE_SDL3)
+    add_subdirectory(Samples/DatasetRenderer)
 endif()
 
 if (WICKED_WINDOWS_TEMPLATE)
