@@ -7,6 +7,7 @@
 #include "wiJobSystem.h"
 
 #include "Utility/stb_image.h"
+#include "Utility/tinyexr.h"
 #include "Utility/dds.h"
 
 #include <algorithm>
@@ -259,6 +260,7 @@ namespace wi
 			{"DDS", DataType::IMAGE},
 			{"TGA", DataType::IMAGE},
 			{"HDR", DataType::IMAGE},
+			{"EXR", DataType::IMAGE},
 			{"HEIC", DataType::IMAGE},
 			{"HEIF", DataType::IMAGE},
 			{"WAV", DataType::SOUND},
@@ -600,6 +602,70 @@ namespace wi
 					}
 					else assert(0); // failed to load DDS
 
+				}
+				else if (!ext.compare("EXR"))
+				{
+					flags &= ~Flags::STREAMING; // disable streaming
+					float* data = nullptr; // tinyexr always outputs RGBA32F
+					int width = 0, height = 0;
+					const char* err = nullptr;
+					const int ret = LoadEXRFromMemory(&data, &width, &height, filedata, filesize, &err);
+					if (ret != TINYEXR_SUCCESS || data == nullptr)
+					{
+						wi::backlog::post("[resourcemanager] EXR load failure: " + name + " (" + (err != nullptr ? err : "unknown error") + ")", wi::backlog::LogLevel::Error);
+						if (err != nullptr)
+						{
+							FreeEXRErrorMessage(err);
+						}
+						if (data != nullptr)
+						{
+							free(data);
+						}
+						success = false;
+					}
+					else
+					{
+						const size_t pixel_count = size_t(width) * size_t(height);
+						const XMFLOAT4* data_full = (const XMFLOAT4*)data;
+
+						bool has_alpha = false;
+						for (size_t i = 0; i < pixel_count && !has_alpha; ++i)
+						{
+							has_alpha = data_full[i].w != 1.0f;
+						}
+
+						// Pack in place (packed texel is never larger than the source texel), same formats as the HDR loader:
+						TextureDesc desc;
+						desc.width = (uint32_t)width;
+						desc.height = (uint32_t)height;
+						if (has_alpha)
+						{
+							desc.format = Format::R16G16B16A16_FLOAT;
+							XMHALF4* data_packed = (XMHALF4*)data;
+							for (size_t i = 0; i < pixel_count; ++i)
+							{
+								XMStoreHalf4(data_packed + i, XMLoadFloat4(data_full + i));
+							}
+						}
+						else
+						{
+							desc.format = Format::R9G9B9E5_SHAREDEXP;
+							XMFLOAT3SE* data_packed = (XMFLOAT3SE*)data;
+							for (size_t i = 0; i < pixel_count; ++i)
+							{
+								XMStoreFloat3SE(data_packed + i, XMLoadFloat4(data_full + i));
+							}
+						}
+						desc.bind_flags = BindFlag::SHADER_RESOURCE;
+						desc.mip_levels = 1;
+						SubresourceData InitData;
+						InitData.data_ptr = data;
+						InitData.row_pitch = width * GetFormatStride(desc.format);
+						success = device->CreateTexture(&desc, &InitData, &resource->texture);
+						device->SetName(&resource->texture, name.c_str());
+
+						free(data); // allocated by tinyexr with malloc
+					}
 				}
 				else if (!ext.compare("HDR"))
 				{
